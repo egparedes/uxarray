@@ -41,9 +41,16 @@ def _read_ugrid(xr_ds):
     face_node_name = face_node_names[0]
     xr_ds = xr_ds.rename({xr_ds[face_node_name].name: "face_node_connectivity"})
 
+    source_face_dim_name = xr_ds["Mesh2"].attrs.get(
+        "face_dimension", xr_ds["face_node_connectivity"].dims[0])
+    if xr_ds["face_node_connectivity"].dims[1] == source_face_dim_name:
+        xr_ds["face_node_connectivity"] = xr_ds[
+            "face_node_connectivity"].transpose()
+    source_face_nodes_dim_name = xr_ds["face_node_connectivity"].dims[1]
+
     xr_ds = xr_ds.rename({
-        xr_ds["face_node_connectivity"].dims[0]: "n_face",
-        xr_ds["face_node_connectivity"].dims[1]: "n_max_face_nodes"
+        source_face_dim_name: "n_face",
+        source_face_nodes_dim_name: "n_max_face_nodes"
     })
 
     xr_ds = xr_ds.set_coords(["node_lon", "node_lat"])
@@ -51,11 +58,13 @@ def _read_ugrid(xr_ds):
     # standardize fill values and data type for face nodes
     xr_ds = _standardize_fill_values(xr_ds)
 
+    # standardize indices to start at 0
+    xr_ds = _standardize_start_index(xr_ds)
+
     # populate source dimensions
     source_dims_dict[coord_dim_name[0]] = "n_node"
-    source_dims_dict[xr_ds["face_node_connectivity"].dims[0]] = "n_face"
-    source_dims_dict[
-        xr_ds["face_node_connectivity"].dims[1]] = "n_max_face_nodes"
+    source_dims_dict[source_face_dim_name] = "n_face"
+    source_dims_dict[source_face_nodes_dim_name] = "n_max_face_nodes"
 
     return xr_ds, source_dims_dict
 
@@ -100,15 +109,44 @@ def _standardize_fill_values(ds):
     # if current dtype and fill value are not standardized
     if face_nodes.dtype != INT_DTYPE or original_fv != INT_FILL_VALUE:
         # replace fill values and set correct dtype
-        new_face_nodes = _replace_fill_values(grid_var=face_nodes,
-                                              original_fill=original_fv,
-                                              new_fill=INT_FILL_VALUE,
-                                              new_dtype=INT_DTYPE)
+        new_face_nodes = _replace_fill_values(
+            grid_var=face_nodes,
+            original_fill=original_fv,
+            new_fill=INT_FILL_VALUE,
+            new_dtype=INT_DTYPE,
+        )
         # reassign data to use updated face nodes
         ds["face_node_connectivity"].data = new_face_nodes
 
         # use new fill value
-        ds["face_node_connectivity"].attrs['_FillValue'] = INT_FILL_VALUE
+        ds["face_node_connectivity"].attrs["_FillValue"] = INT_FILL_VALUE
+
+    return ds
+
+
+def _standardize_start_index(ds):
+    """Standardizes the indices of index variables to start at 0.
+
+    Parameters
+    ----------
+    da : xarray.Dataset
+        Input Dataset
+
+    Returns
+    ----------
+    ds : xarray.Dataset
+        Input Dataset with correct index variables
+    """
+
+    for var_name in [
+            "edge_node_connectivity", "face_node_connectivity",
+            "face_edge_connectivity", "face_face_connectivity",
+            "edge_face_connectivity", "boundary_node_connectivity"
+    ]:
+        if var_name in ds:
+            da = ds[var_name]
+            if "start_index" in da.attrs and da.attrs["start_index"] != 0:
+                da -= INT_DTYPE(da.attrs["start_index"])
 
     return ds
 
